@@ -5,14 +5,6 @@ pub fn Sys_SetPath(path: [:0]const u16) void {
     externs.PySys_SetPath(path.ptr);
 }
 
-pub fn Finalize() void {
-    externs.Py_Finalize();
-}
-
-pub fn DecRef(code: ?*anyopaque) void {
-    externs.Py_DecRef(code);
-}
-
 pub fn SetProgramName(name: [:0]const u8) void {
     externs.Py_SetProgramName(name.ptr);
 }
