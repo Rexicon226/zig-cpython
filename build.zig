@@ -8,54 +8,38 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
-
     const openssl_dep = b.dependency("openssl", .{
         .target = target,
         .optimize = optimize,
     });
 
-    const source = b.dependency("python", .{});
+    const config_header = getConfigHeader(b, target.result);
 
-    const python = try buildPython(b, target, optimize);
-    python.linkLibrary(libz_dep.artifact("z"));
-    python.linkLibrary(openssl_dep.artifact("openssl"));
+    const libpython = try buildLibPython(b, target, optimize, config_header);
+    libpython.linkLibrary(libz_dep.artifact("z"));
+    libpython.linkLibrary(openssl_dep.artifact("openssl"));
+    b.installArtifact(libpython);
 
-    b.installArtifact(python);
-    const lib_install = b.addInstallDirectory(.{
-        .source_dir = source.path("Lib"),
-        .install_dir = .{ .custom = "Lib" },
-        .install_subdir = ".",
-    });
-    python.step.dependOn(&lib_install.step);
+    const cpython = try buildCpython(b, target, optimize, libpython);
+    cpython.linkLibrary(libz_dep.artifact("z"));
+    cpython.linkLibrary(openssl_dep.artifact("openssl"));
+    b.installArtifact(cpython);
 
-    const cpython = b.addModule("cpython", .{
+    const bindings = b.addModule("cpython", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
-    cpython.linkLibrary(python);
+    bindings.linkLibrary(libpython);
 }
 
-fn buildPython(
+fn getConfigHeader(
     b: *std.Build,
-    target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-) !*std.Build.Step.Compile {
+    t: std.Target,
+) *std.Build.Step.ConfigHeader {
     const source = b.dependency("python", .{});
-    const t = target.result;
 
-    const python = b.addStaticLibrary(.{
-        .name = "python",
-        .target = target,
-        .optimize = optimize,
-    });
-    python.linkLibC();
-    python.addIncludePath(source.path("."));
-    python.addIncludePath(source.path("Include"));
-    python.addIncludePath(source.path("Include/internal"));
-    python.defineCMacro("PLATLIBDIR", "\"lib\"");
-
-    python.addConfigHeader(b.addConfigHeader(.{
+    return b.addConfigHeader(.{
         .style = .{ .autoconf = source.path("pyconfig.h.in") },
         .include_path = "pyconfig.h",
     }, .{
@@ -600,178 +584,226 @@ fn buildPython(
         .socklen_t = null,
         .uid_t = null,
         .WORDS_BIGENDIAN = null,
-    }));
+    });
+}
 
-    python.addCSourceFiles(.{ .root = source.path("."), .files = &.{
-        "Modules/_abc.c",
-        "Modules/_codecsmodule.c",
-        "Modules/_collectionsmodule.c",
-        "Modules/_contextvarsmodule.c",
-        "Modules/_functoolsmodule.c",
-        "Modules/_io/_iomodule.c",
-        "Modules/_io/bufferedio.c",
-        "Modules/_io/bytesio.c",
-        "Modules/_io/fileio.c",
-        "Modules/_io/iobase.c",
-        "Modules/_io/stringio.c",
-        "Modules/_io/textio.c",
-        "Modules/_localemodule.c",
-        "Modules/_operator.c",
-        "Modules/_posixsubprocess.c",
-        "Modules/_randommodule.c",
-        "Modules/_sre.c",
-        "Modules/_ssl.c",
-        "Modules/_stat.c",
-        "Modules/_struct.c",
-        "Modules/_threadmodule.c",
-        "Modules/_tracemalloc.c",
-        "Modules/_weakref.c",
-        "Modules/arraymodule.c",
-        "Modules/atexitmodule.c",
-        "Modules/binascii.c",
-        "Modules/config.c",
-        "Modules/errnomodule.c",
-        "Modules/faulthandler.c",
-        "Modules/gcmodule.c",
-        "Modules/getbuildinfo.c",
-        "Modules/itertoolsmodule.c",
-        "Modules/main.c",
-        "Modules/mathmodule.c",
-        "Modules/md5module.c",
-        "Modules/sha1module.c",
-        "Modules/sha256module.c",
+const core_files = &.{
+    "Modules/main.c",
+    "Modules/_abc.c",
+    "Modules/_codecsmodule.c",
+    "Modules/_collectionsmodule.c",
+    "Modules/_contextvarsmodule.c",
+    "Modules/_functoolsmodule.c",
+    "Modules/_io/_iomodule.c",
+    "Modules/_io/bufferedio.c",
+    "Modules/_io/bytesio.c",
+    "Modules/_io/fileio.c",
+    "Modules/_io/iobase.c",
+    "Modules/_io/stringio.c",
+    "Modules/_io/textio.c",
+    "Modules/_localemodule.c",
+    "Modules/_operator.c",
+    "Modules/_posixsubprocess.c",
+    "Modules/_randommodule.c",
+    "Modules/_sre.c",
+    "Modules/_ssl.c",
+    "Modules/_stat.c",
+    "Modules/_struct.c",
+    "Modules/_threadmodule.c",
+    "Modules/_tracemalloc.c",
+    "Modules/_weakref.c",
+    "Modules/arraymodule.c",
+    "Modules/atexitmodule.c",
+    "Modules/binascii.c",
+    "Modules/config.c",
+    "Modules/errnomodule.c",
+    "Modules/faulthandler.c",
+    "Modules/gcmodule.c",
+    "Modules/getbuildinfo.c",
+    "Modules/itertoolsmodule.c",
+    "Modules/main.c",
+    "Modules/mathmodule.c",
+    "Modules/md5module.c",
+    "Modules/sha1module.c",
+    "Modules/sha256module.c",
 
-        "Modules/_blake2/blake2module.c",
-        "Modules/_blake2/blake2b_impl.c",
-        "Modules/_blake2/blake2s_impl.c",
+    "Modules/_blake2/blake2module.c",
+    "Modules/_blake2/blake2b_impl.c",
+    "Modules/_blake2/blake2s_impl.c",
 
-        "Modules/_sha3/sha3module.c",
+    "Modules/_sha3/sha3module.c",
 
-        "Modules/posixmodule.c",
-        "Modules/pwdmodule.c",
-        "Modules/selectmodule.c",
-        "Modules/sha512module.c",
-        "Modules/signalmodule.c",
-        "Modules/socketmodule.c",
-        "Modules/symtablemodule.c",
-        "Modules/timemodule.c",
-        "Modules/unicodedata.c",
-        "Modules/xxsubtype.c",
-        "Modules/zlibmodule.c",
-        "Objects/abstract.c",
-        "Objects/accu.c",
-        "Objects/boolobject.c",
-        "Objects/bytearrayobject.c",
-        "Objects/bytes_methods.c",
-        "Objects/bytesobject.c",
-        "Objects/call.c",
-        "Objects/capsule.c",
-        "Objects/cellobject.c",
-        "Objects/classobject.c",
-        "Objects/codeobject.c",
-        "Objects/complexobject.c",
-        "Objects/descrobject.c",
-        "Objects/dictobject.c",
-        "Objects/enumobject.c",
-        "Objects/exceptions.c",
-        "Objects/fileobject.c",
-        "Objects/floatobject.c",
-        "Objects/frameobject.c",
-        "Objects/funcobject.c",
-        "Objects/genericaliasobject.c",
-        "Objects/genobject.c",
-        "Objects/interpreteridobject.c",
-        "Objects/iterobject.c",
-        "Objects/listobject.c",
-        "Objects/longobject.c",
-        "Objects/memoryobject.c",
-        "Objects/methodobject.c",
-        "Objects/moduleobject.c",
-        "Objects/namespaceobject.c",
-        "Objects/object.c",
-        "Objects/obmalloc.c",
-        "Objects/odictobject.c",
-        "Objects/picklebufobject.c",
-        "Objects/rangeobject.c",
-        "Objects/setobject.c",
-        "Objects/sliceobject.c",
-        "Objects/structseq.c",
-        "Objects/tupleobject.c",
-        "Objects/typeobject.c",
-        "Objects/unicodectype.c",
-        "Objects/unicodeobject.c",
-        "Objects/unionobject.c",
-        "Objects/weakrefobject.c",
-        "Parser/myreadline.c",
-        "Parser/parser.c",
-        "Parser/peg_api.c",
-        "Parser/pegen.c",
-        "Parser/string_parser.c",
-        "Parser/token.c",
-        "Parser/tokenizer.c",
-        "Python/Python-ast.c",
-        "Python/_warnings.c",
-        "Python/asdl.c",
-        "Python/ast.c",
-        "Python/ast_opt.c",
-        "Python/ast_unparse.c",
-        "Python/bltinmodule.c",
-        "Python/bootstrap_hash.c",
-        "Python/ceval.c",
-        "Python/codecs.c",
-        "Python/compile.c",
-        "Python/context.c",
-        "Python/dtoa.c",
-        "Python/dynamic_annotations.c",
-        "Python/errors.c",
-        "Python/fileutils.c",
-        "Python/formatter_unicode.c",
-        "Python/frozen.c",
-        "Python/frozenmain.c",
-        "Python/future.c",
-        "Python/getargs.c",
-        "Python/getcompiler.c",
-        "Python/getcopyright.c",
-        "Python/getopt.c",
-        "Python/getplatform.c",
-        "Python/getversion.c",
-        "Python/hamt.c",
-        "Python/hashtable.c",
-        "Python/import.c",
-        "Python/importdl.c",
-        "Python/initconfig.c",
-        "Python/marshal.c",
-        "Python/modsupport.c",
-        "Python/mysnprintf.c",
-        "Python/mystrtoul.c",
-        "Python/pathconfig.c",
-        "Python/preconfig.c",
-        "Python/pyarena.c",
-        "Python/pyctype.c",
-        "Python/pyfpe.c",
-        "Python/pyhash.c",
-        "Python/pylifecycle.c",
-        "Python/pymath.c",
-        "Python/pystate.c",
-        "Python/pystrcmp.c",
-        "Python/pystrhex.c",
-        "Python/pystrtod.c",
-        "Python/pythonrun.c",
-        "Python/pytime.c",
-        "Python/structmember.c",
-        "Python/suggestions.c",
-        "Python/symtable.c",
-        "Python/sysmodule.c",
-        "Python/thread.c",
-        "Python/traceback.c",
-    }, .flags = &.{
-        "-fwrapv",
-        "-std=c11",
-        "-fvisibility=hidden",
-        "-DPy_BUILD_CORE",
-    } });
+    "Modules/posixmodule.c",
+    "Modules/pwdmodule.c",
+    "Modules/selectmodule.c",
+    "Modules/sha512module.c",
+    "Modules/signalmodule.c",
+    "Modules/socketmodule.c",
+    "Modules/symtablemodule.c",
+    "Modules/timemodule.c",
+    "Modules/unicodedata.c",
+    "Modules/xxsubtype.c",
+    "Modules/zlibmodule.c",
+    "Objects/abstract.c",
+    "Objects/accu.c",
+    "Objects/boolobject.c",
+    "Objects/bytearrayobject.c",
+    "Objects/bytes_methods.c",
+    "Objects/bytesobject.c",
+    "Objects/call.c",
+    "Objects/capsule.c",
+    "Objects/cellobject.c",
+    "Objects/classobject.c",
+    "Objects/codeobject.c",
+    "Objects/complexobject.c",
+    "Objects/descrobject.c",
+    "Objects/dictobject.c",
+    "Objects/enumobject.c",
+    "Objects/exceptions.c",
+    "Objects/fileobject.c",
+    "Objects/floatobject.c",
+    "Objects/frameobject.c",
+    "Objects/funcobject.c",
+    "Objects/genericaliasobject.c",
+    "Objects/genobject.c",
+    "Objects/interpreteridobject.c",
+    "Objects/iterobject.c",
+    "Objects/listobject.c",
+    "Objects/longobject.c",
+    "Objects/memoryobject.c",
+    "Objects/methodobject.c",
+    "Objects/moduleobject.c",
+    "Objects/namespaceobject.c",
+    "Objects/object.c",
+    "Objects/obmalloc.c",
+    "Objects/odictobject.c",
+    "Objects/picklebufobject.c",
+    "Objects/rangeobject.c",
+    "Objects/setobject.c",
+    "Objects/sliceobject.c",
+    "Objects/structseq.c",
+    "Objects/tupleobject.c",
+    "Objects/typeobject.c",
+    "Objects/unicodectype.c",
+    "Objects/unicodeobject.c",
+    "Objects/unionobject.c",
+    "Objects/weakrefobject.c",
+    "Parser/myreadline.c",
+    "Parser/parser.c",
+    "Parser/peg_api.c",
+    "Parser/pegen.c",
+    "Parser/string_parser.c",
+    "Parser/token.c",
+    "Parser/tokenizer.c",
+    "Python/Python-ast.c",
+    "Python/_warnings.c",
+    "Python/asdl.c",
+    "Python/ast.c",
+    "Python/ast_opt.c",
+    "Python/ast_unparse.c",
+    "Python/bltinmodule.c",
+    "Python/bootstrap_hash.c",
+    "Python/ceval.c",
+    "Python/codecs.c",
+    "Python/compile.c",
+    "Python/context.c",
+    "Python/dtoa.c",
+    "Python/dynamic_annotations.c",
+    "Python/errors.c",
+    "Python/fileutils.c",
+    "Python/formatter_unicode.c",
+    "Python/frozen.c",
+    "Python/frozenmain.c",
+    "Python/future.c",
+    "Python/getargs.c",
+    "Python/getcompiler.c",
+    "Python/getcopyright.c",
+    "Python/getopt.c",
+    "Python/getplatform.c",
+    "Python/getversion.c",
+    "Python/hamt.c",
+    "Python/hashtable.c",
+    "Python/import.c",
+    "Python/importdl.c",
+    "Python/initconfig.c",
+    "Python/marshal.c",
+    "Python/modsupport.c",
+    "Python/mysnprintf.c",
+    "Python/mystrtoul.c",
+    "Python/pathconfig.c",
+    "Python/preconfig.c",
+    "Python/pyarena.c",
+    "Python/pyctype.c",
+    "Python/pyfpe.c",
+    "Python/pyhash.c",
+    "Python/pylifecycle.c",
+    "Python/pymath.c",
+    "Python/pystate.c",
+    "Python/pystrcmp.c",
+    "Python/pystrhex.c",
+    "Python/pystrtod.c",
+    "Python/pythonrun.c",
+    "Python/pytime.c",
+    "Python/structmember.c",
+    "Python/suggestions.c",
+    "Python/symtable.c",
+    "Python/sysmodule.c",
+    "Python/thread.c",
+    "Python/traceback.c",
+};
 
-    python.addCSourceFiles(.{ .root = source.path("."), .files = &.{
+fn buildCpython(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    libpython: *std.Build.Step.Compile,
+) !*std.Build.Step.Compile {
+    const source = b.dependency("python", .{});
+
+    const cpython = b.addExecutable(.{
+        .name = "cpython",
+        .target = target,
+        .optimize = optimize,
+    });
+    cpython.linkLibrary(libpython);
+    cpython.addCSourceFile(.{ .file = source.path("Programs/python.c") });
+
+    return cpython;
+}
+
+fn buildLibPython(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    config_header: *std.Build.Step.ConfigHeader,
+) !*std.Build.Step.Compile {
+    const source = b.dependency("python", .{});
+    const t = target.result;
+
+    const libpython = b.addStaticLibrary(.{
+        .name = "python",
+        .target = target,
+        .optimize = optimize,
+    });
+    libpython.linkLibC();
+    libpython.addIncludePath(source.path("."));
+    libpython.addIncludePath(source.path("Include"));
+    libpython.addIncludePath(source.path("Include/internal"));
+    libpython.defineCMacro("PLATLIBDIR", "\"lib\"");
+    libpython.addConfigHeader(config_header);
+
+    libpython.addCSourceFiles(.{
+        .root = source.path("."),
+        .files = core_files,
+        .flags = &.{
+            "-fwrapv",
+            "-std=c11",
+            "-fvisibility=hidden",
+            "-DPy_BUILD_CORE",
+        },
+    });
+
+    libpython.addCSourceFiles(.{ .root = source.path("."), .files = &.{
         "Modules/getpath.c",
     }, .flags = &.{
         "-fwrapv",
@@ -788,7 +820,7 @@ fn buildPython(
         "-DPYTHONFRAMEWORK=\"\"",
     } });
 
-    python.addCSourceFiles(.{ .root = source.path("."), .files = &.{
+    libpython.addCSourceFiles(.{ .root = source.path("."), .files = &.{
         "Python/dynload_shlib.c",
     }, .flags = &.{
         "-fwrapv",
@@ -799,7 +831,7 @@ fn buildPython(
         b.fmt("-DSOABI=\"cpython-310-{s}\"", .{try t.linuxTriple(b.allocator)}),
     } });
 
-    return python;
+    return libpython;
 }
 
 fn have(x: bool) ?u1 {
